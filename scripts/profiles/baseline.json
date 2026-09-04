@@ -1,0 +1,8 @@
+{
+  "name": "baseline",
+  "cowrie": true,
+  "dionaea": true,
+  "fake_app": true,
+  "telemetry_level": "normal",
+  "fake_files": "basic"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "investigation",
+  "cowrie": true,
+  "dionaea": true,
+  "fake_app": true,
+  "telemetry_level": "high",
+  "fake_files": "expanded"
+}
