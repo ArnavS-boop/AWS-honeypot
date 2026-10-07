@@ -1,0 +1,11 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform-plan*.log
+localstack_providers_override.tf
+brokernodegroupinfo.json
+msk-cluster.json
+kafka.tgz
+kafka_2.13-4.1.0/
+__pycache__/
+*.py[cod]

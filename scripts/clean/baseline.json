@@ -1,0 +1,11 @@
+{
+  "profile": "clean-baseline",
+  "directories": [],
+  "files": [],
+  "remove": [
+    "/var/www/app/logs",
+    "/var/www/app/uploads/archive",
+    "/opt/app/data/cache",
+    "/var/www/app/.env.example"
+  ]
+}

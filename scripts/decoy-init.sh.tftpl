@@ -1,0 +1,296 @@
+#!/bin/bash
+set -euo pipefail
+
+INFRA_ROOT="/opt/.infra"
+PROFILE_ROOT="$INFRA_ROOT/profiles"
+CLEAN_ROOT="$INFRA_ROOT/clean"
+
+BUCKET="${bucket_name}"
+S3_PREFIX="decoy"
+S3_ENDPOINT="${s3_endpoint}"
+AWS_S3_ARGS=()
+if [ -n "$S3_ENDPOINT" ]; then
+    AWS_S3_ARGS+=(--endpoint-url="$S3_ENDPOINT")
+fi
+
+export KAFKA_BOOTSTRAP_SERVERS="${kafka_bootstrap_servers}"
+export KAFKA_SECURITY_PROTOCOL="${kafka_security_protocol}"
+export KAFKA_LOCALSTACK_MODE="${kafka_localstack_mode}"
+
+if [ "$KAFKA_LOCALSTACK_MODE" = "true" ]; then
+    KAFKA_HOST="$(getent ahostsv4 host.docker.internal | awk 'NR == 1 {print $1}')"
+    if [ -z "$KAFKA_HOST" ]; then
+        echo "[decoy-init] ERROR: LocalStack host gateway did not resolve"
+        exit 1
+    fi
+
+    IFS=',' read -r -a KAFKA_BROKERS <<< "$KAFKA_BOOTSTRAP_SERVERS"
+    for broker in "$${KAFKA_BROKERS[@]}"; do
+        broker_host="$${broker%:*}"
+        echo "$KAFKA_HOST $broker_host" >> /etc/hosts
+    done
+fi
+
+echo "[decoy-init] Starting Decoy initialization"
+echo "[decoy-init] Scripts hash: ${scripts_hash}"
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+
+apt-get install -y \
+    awscli \
+    python3 \
+    python3-pip \
+    python3-venv \
+    curl \
+    jq
+python3 -m pip install --quiet --break-system-packages boto3
+
+if [ "$KAFKA_LOCALSTACK_MODE" = "true" ]; then
+    export AWS_ACCESS_KEY_ID="test"
+    export AWS_SECRET_ACCESS_KEY="test"
+fi
+export AWS_DEFAULT_REGION="us-east-1"
+
+install -d \
+    -o root \
+    -g root \
+    -m 700 \
+    "$INFRA_ROOT"
+
+install -d \
+    -o root \
+    -g root \
+    -m 700 \
+    "$PROFILE_ROOT"
+
+install -d \
+    -o root \
+    -g root \
+    -m 700 \
+    "$CLEAN_ROOT"
+
+echo "[decoy-init] Downloading infrastructure files from S3"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/setup-filesystem.sh" \
+    "$INFRA_ROOT/setup-filesystem.sh"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/install-cowrie.sh" \
+    "$INFRA_ROOT/install-cowrie.sh"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/setup-cowrie.sh" \
+    "$INFRA_ROOT/setup-cowrie.sh"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/decoy-controller.py" \
+    "$INFRA_ROOT/decoy-controller.py"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/cowrie-kafka-producer.py" \
+    "$INFRA_ROOT/cowrie-kafka-producer.py"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/cowrie-kafka-supervisor.sh" \
+    "$INFRA_ROOT/cowrie-kafka-supervisor.sh"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/machine_log_producer.py" \
+    "$INFRA_ROOT/machine_log_producer.py"
+
+echo "[decoy-init] Downloading profiles"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/profiles/baseline.json" \
+    "$PROFILE_ROOT/baseline.json"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/profiles/investigation.json" \
+    "$PROFILE_ROOT/investigation.json"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/clean/baseline.json" \
+    "$CLEAN_ROOT/baseline.json"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/clean/investigation.json" \
+    "$CLEAN_ROOT/investigation.json"
+
+echo "[decoy-init] Securing infrastructure files"
+
+chown root:root \
+    "$INFRA_ROOT/setup-filesystem.sh" \
+    "$INFRA_ROOT/install-cowrie.sh" \
+    "$INFRA_ROOT/setup-cowrie.sh" \
+    "$INFRA_ROOT/decoy-controller.py" \
+    "$INFRA_ROOT/cowrie-kafka-producer.py" \
+    "$INFRA_ROOT/cowrie-kafka-supervisor.sh" \
+    "$INFRA_ROOT/machine_log_producer.py"
+
+chmod 700 \
+    "$INFRA_ROOT/setup-filesystem.sh" \
+    "$INFRA_ROOT/install-cowrie.sh" \
+    "$INFRA_ROOT/setup-cowrie.sh" \
+    "$INFRA_ROOT/decoy-controller.py" \
+    "$INFRA_ROOT/cowrie-kafka-producer.py" \
+    "$INFRA_ROOT/cowrie-kafka-supervisor.sh" \
+    "$INFRA_ROOT/machine_log_producer.py"
+
+chown root:root \
+    "$PROFILE_ROOT"/*.json \
+    "$CLEAN_ROOT"/*.json
+
+chmod 600 \
+    "$PROFILE_ROOT"/*.json \
+    "$CLEAN_ROOT"/*.json
+
+echo "[decoy-init] Installing Cowrie"
+
+if [ ! -f /opt/app/.svc/.installed ]; then
+    /bin/bash "$INFRA_ROOT/install-cowrie.sh"
+fi
+
+echo "[decoy-init] Applying baseline filesystem"
+
+/bin/bash "$INFRA_ROOT/setup-filesystem.sh" baseline
+
+echo "[decoy-init] Applying baseline Cowrie profile"
+
+/bin/bash "$INFRA_ROOT/setup-cowrie.sh" baseline
+
+echo "[decoy-init] Installing Kafka Python client"
+
+COWRIE_PYTHON="/opt/app/.svc/SVCWEB-env/bin/python"
+
+"$COWRIE_PYTHON" -m pip install --quiet kafka-python
+
+echo "[decoy-init] Kafka Python client installed"
+
+for attempt in $(seq 1 30); do
+    if "$COWRIE_PYTHON" -c '
+import os
+from kafka import KafkaConsumer
+
+config = {"bootstrap_servers": os.environ["KAFKA_BOOTSTRAP_SERVERS"].split(","), "request_timeout_ms": 3000}
+if os.environ["KAFKA_SECURITY_PROTOCOL"] == "SSL":
+    config["security_protocol"] = "SSL"
+consumer = KafkaConsumer(**config)
+consumer.close()
+' >/dev/null 2>&1; then
+        echo "[decoy-init] Kafka is available"
+        break
+    fi
+    if [ "$attempt" -eq 30 ]; then
+        echo "[decoy-init] ERROR: Kafka did not become available"
+        exit 1
+    fi
+    sleep 2
+done
+
+echo "[decoy-init] Starting Cowrie → Kafka telemetry supervisor"
+
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/command_dispatcher.py" \
+    "$INFRA_ROOT/command_dispatcher.py"
+
+chown root:root "$INFRA_ROOT/command_dispatcher.py"
+
+chmod 700 "$INFRA_ROOT/command_dispatcher.py"
+
+echo "[decoy-init] Starting command dispatcher"
+
+install -d -o root -g root -m 700 /var/lib/decoy-command-dispatcher
+
+nohup env \
+    HONEYPOT_BUCKET="$BUCKET" \
+    S3_ENDPOINT="$S3_ENDPOINT" \
+    AWS_DEFAULT_REGION="$AWS_DEFAULT_REGION" \
+    python3 \
+    "$INFRA_ROOT/command_dispatcher.py" \
+    >/var/log/decoy-command-dispatcher.log 2>&1 &
+
+echo $! > /run/decoy-command-dispatcher.pid
+pkill -f \
+    "/opt/.infra/cowrie-kafka-supervisor.sh" \
+    2>/dev/null || true
+
+nohup env \
+    KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
+    /bin/bash \
+    "$INFRA_ROOT/cowrie-kafka-supervisor.sh" \
+    >/dev/null 2>&1 &
+
+echo $! > /run/cowrie-kafka-supervisor.pid
+
+echo "[decoy-init] Telemetry supervisor started with PID $!"
+
+sleep 2
+
+if kill -0 "$(cat /run/cowrie-kafka-supervisor.pid)" 2>/dev/null; then
+    echo "[decoy-init] Telemetry supervisor is running"
+else
+    echo "[decoy-init] ERROR: Telemetry supervisor failed to start"
+    exit 1
+fi
+
+echo "[decoy-init] Starting machine log telemetry producer"
+
+pkill -f \
+    "/opt/.infra/machine_log_producer.py" \
+    2>/dev/null || true
+
+nohup env \
+    KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
+    KAFKA_TELEMETRY_TOPIC="honeypot-telemetry" \
+    "$COWRIE_PYTHON" \
+    "$INFRA_ROOT/machine_log_producer.py" \
+    >/var/log/machine-log-producer.log 2>&1 &
+
+echo $! > /run/machine-log-producer.pid
+
+echo "[decoy-init] Machine log producer started with PID $!"
+
+sleep 2
+
+if kill -0 "$(cat /run/machine-log-producer.pid)" 2>/dev/null; then
+    echo "[decoy-init] Machine log producer is running"
+else
+    echo "[decoy-init] ERROR: Machine log producer failed to start"
+    exit 1
+fi
+
+echo "[decoy-init] Starting Decoy Controller"
+
+nohup python3 "$INFRA_ROOT/decoy-controller.py" \
+    > /var/log/decoy-controller.log 2>&1 &
+
+echo $! > /run/decoy-controller.pid
+
+for attempt in $(seq 1 10); do
+    if curl --fail --silent http://127.0.0.1:9000/health >/dev/null; then
+        echo "[decoy-init] Controller health check passed"
+        break
+    fi
+    if [ "$attempt" -eq 10 ]; then
+        echo "[decoy-init] ERROR: Decoy controller did not become available"
+        exit 1
+    fi
+    sleep 1
+done
+
+echo "[decoy-init] Decoy initialization complete"

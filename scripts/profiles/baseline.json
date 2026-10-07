@@ -1,8 +1,46 @@
 {
-  "name": "baseline",
-  "cowrie": true,
-  "dionaea": true,
-  "fake_app": true,
-  "telemetry_level": "normal",
-  "fake_files": "basic"
+  "profile": "baseline",
+  "directories": [
+    {
+      "path": "/var/www/app",
+      "owner": "root",
+      "group": "root",
+      "mode": "755"
+    },
+    {
+      "path": "/var/www/app/uploads",
+      "owner": "root",
+      "group": "root",
+      "mode": "755"
+    },
+    {
+      "path": "/var/www/app/backups",
+      "owner": "root",
+      "group": "root",
+      "mode": "755"
+    },
+    {
+      "path": "/opt/app/data",
+      "owner": "root",
+      "group": "root",
+      "mode": "755"
+    }
+  ],
+  "files": [
+    {
+      "path": "/var/www/app/index.html",
+      "content": "<html><head><title>Application Portal</title></head><body>Application Portal</body></html>",
+      "owner": "root",
+      "group": "root",
+      "mode": "644"
+    },
+    {
+      "path": "/var/www/app/config.ini",
+      "content": "[application]\nname=Application Portal\nversion=1.4.2\n",
+      "owner": "root",
+      "group": "root",
+      "mode": "640"
+    }
+  ],
+  "remove": []
 }

@@ -1,0 +1,12 @@
+{
+  "profile": "clean-investigation",
+  "directories": [],
+  "files": [],
+  "remove": [
+    "/var/www/app/index.html",
+    "/var/www/app/config.ini",
+    "/var/www/app/uploads",
+    "/var/www/app/backups",
+    "/opt/app/data"
+  ]
+}

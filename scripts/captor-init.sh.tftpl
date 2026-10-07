@@ -1,0 +1,155 @@
+#!/bin/bash
+set -euo pipefail
+
+INFRA_ROOT="/opt/.infra"
+
+BUCKET="${bucket_name}"
+S3_PREFIX="decoy"
+S3_ENDPOINT="${s3_endpoint}"
+AWS_S3_ARGS=()
+if [ -n "$S3_ENDPOINT" ]; then
+    AWS_S3_ARGS+=(--endpoint-url="$S3_ENDPOINT")
+fi
+
+export KAFKA_BOOTSTRAP_SERVERS="${kafka_bootstrap_servers}"
+export KAFKA_SECURITY_PROTOCOL="${kafka_security_protocol}"
+export KAFKA_LOCALSTACK_MODE="${kafka_localstack_mode}"
+export CAPTOR_S3_BUCKET="${bucket_name}"
+export CAPTOR_S3_ENDPOINT="${s3_endpoint}"
+
+if [ "$KAFKA_LOCALSTACK_MODE" = "true" ]; then
+    KAFKA_HOST="$(getent ahostsv4 host.docker.internal | awk 'NR == 1 {print $1}')"
+    if [ -z "$KAFKA_HOST" ]; then
+        echo "[captor-init] ERROR: LocalStack host gateway did not resolve"
+        exit 1
+    fi
+
+    IFS=',' read -r -a KAFKA_BROKERS <<< "$KAFKA_BOOTSTRAP_SERVERS"
+    for broker in "$${KAFKA_BROKERS[@]}"; do
+        broker_host="$${broker%:*}"
+        echo "$KAFKA_HOST $broker_host" >> /etc/hosts
+    done
+fi
+
+echo "[captor-init] Starting Captor initialization"
+echo "[captor-init] Bootstrap hash: ${scripts_hash}"
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+
+apt-get install -y \
+    awscli \
+    python3 \
+    python3-pip \
+    python3-venv \
+    curl \
+    jq
+
+if [ "$KAFKA_LOCALSTACK_MODE" = "true" ]; then
+    export AWS_ACCESS_KEY_ID="test"
+    export AWS_SECRET_ACCESS_KEY="test"
+fi
+export AWS_DEFAULT_REGION="us-east-1"
+
+install -d \
+    -o root \
+    -g root \
+    -m 700 \
+    "$INFRA_ROOT"
+
+echo "[captor-init] Downloading infrastructure files from S3"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/captor.py" \
+    "$INFRA_ROOT/captor.py"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/captor-persistence.py" \
+    "$INFRA_ROOT/captor_persistence.py"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/normalization_schema.py" \
+    "$INFRA_ROOT/normalization_schema.py"
+
+aws "$${AWS_S3_ARGS[@]}" \
+    s3 cp \
+    "s3://$BUCKET/$S3_PREFIX/captor-supervisor.sh" \
+    "$INFRA_ROOT/captor-supervisor.sh"
+
+echo "[captor-init] Securing infrastructure files"
+
+chown root:root \
+    "$INFRA_ROOT/captor.py" \
+    "$INFRA_ROOT/captor-supervisor.sh"
+
+chmod 700 \
+    "$INFRA_ROOT/captor.py" \
+    "$INFRA_ROOT/captor-supervisor.sh"
+
+chown root:root \
+    "$INFRA_ROOT/captor.py" \
+    "$INFRA_ROOT/captor-supervisor.sh" \
+    "$INFRA_ROOT/normalization_schema.py"
+
+chmod 700 \
+    "$INFRA_ROOT/captor.py" \
+    "$INFRA_ROOT/captor-supervisor.sh" \
+    "$INFRA_ROOT/normalization_schema.py"
+
+echo "[captor-init] Installing Kafka Python client"
+
+python3 -m pip install --quiet --break-system-packages boto3 kafka-python
+
+echo "[captor-init] Kafka Python client installed"
+
+for attempt in $(seq 1 30); do
+    if python3 -c '
+import os
+from kafka import KafkaConsumer
+
+config = {"bootstrap_servers": os.environ["KAFKA_BOOTSTRAP_SERVERS"].split(","), "request_timeout_ms": 3000}
+if os.environ["KAFKA_SECURITY_PROTOCOL"] == "SSL":
+    config["security_protocol"] = "SSL"
+consumer = KafkaConsumer(**config)
+consumer.close()
+' >/dev/null 2>&1; then
+        echo "[captor-init] Kafka is available"
+        break
+    fi
+    if [ "$attempt" -eq 30 ]; then
+        echo "[captor-init] ERROR: Kafka did not become available"
+        exit 1
+    fi
+    sleep 2
+done
+
+echo "[captor-init] Starting Captor consumer"
+
+pkill -f \
+    "/opt/.infra/captor-supervisor.sh" \
+    2>/dev/null || true
+
+nohup env \
+    KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
+    /bin/bash \
+    "$INFRA_ROOT/captor-supervisor.sh" \
+    >/dev/null 2>&1 &
+
+echo $! > /run/honeypot-captor-supervisor.pid
+
+echo "[captor-init] Captor supervisor started with PID $!"
+
+sleep 2
+
+if kill -0 "$(cat /run/honeypot-captor-supervisor.pid)" 2>/dev/null; then
+    echo "[captor-init] Captor supervisor is running"
+else
+    echo "[captor-init] ERROR: Captor supervisor failed to start"
+    exit 1
+fi
+
+echo "[captor-init] Captor initialization complete"

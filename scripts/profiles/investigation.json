@@ -1,8 +1,40 @@
 {
-  "name": "investigation",
-  "cowrie": true,
-  "dionaea": true,
-  "fake_app": true,
-  "telemetry_level": "high",
-  "fake_files": "expanded"
+  "profile": "investigation",
+  "directories": [
+    {
+      "path": "/var/www/app/logs",
+      "owner": "root",
+      "group": "root",
+      "mode": "755"
+    },
+    {
+      "path": "/var/www/app/uploads/archive",
+      "owner": "root",
+      "group": "root",
+      "mode": "755"
+    },
+    {
+      "path": "/opt/app/data/cache",
+      "owner": "root",
+      "group": "root",
+      "mode": "755"
+    }
+  ],
+  "files": [
+    {
+      "path": "/var/www/app/logs/application.log",
+      "content": "2026-09-05 10:12:03 INFO application started\n2026-09-05 10:12:05 INFO database connection established\n",
+      "owner": "root",
+      "group": "root",
+      "mode": "640"
+    },
+    {
+      "path": "/var/www/app/.env.example",
+      "content": "APP_ENV=production\nAPP_DEBUG=false\nDATABASE_HOST=db.internal\n",
+      "owner": "root",
+      "group": "root",
+      "mode": "644"
+    }
+  ],
+  "remove": []
 }
